@@ -3,6 +3,9 @@ uuid = "a7c27f48-0311-42f6-a7f8-2c11e75eb415"
 authors = ["Yingbo Ma <mayingbo5@gmail.com> and contributors"]
 version = "0.1.0"
 
+[deps]
+InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+
 [compat]
 julia = "1"
 

@@ -1,5 +1,6 @@
 module Unityper
 
-# Write your package code here.
+export @compactify
+include("compactify.jl")
 
 end
