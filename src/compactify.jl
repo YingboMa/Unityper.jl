@@ -10,9 +10,12 @@ struct A <: AT
 end
 struct B <: AT
     a::Int
+    b::Float64
 end
 struct C <: AT
     b::Float64
+    d::Bool
+    e::Int
 end
 struct D <: AT
     b::Any
@@ -93,18 +96,66 @@ function _compactify(mod, block)
                              }, # fieldnames, oldname => (newname, newtype=>oldtype)
                        }()
 
-        for (S, cfields) in Ss
+        Ss = [(S, [
+                   isexpr(f, :(::)) ? (f.args[1], getproperty(mod, f.args[2])) : (f, t) # field and type
+                   for f in cfields
+                  ])
+              for (S, cfields) in Ss]
+
+        # There are two cases which we want to compactify fields.
+        # (1): We have
+        # ```
+        # struct A
+        #     a::Float64
+        #     b::Bool
+        # end
+        # struct B
+        #     a::Float64
+        #     b::Float64
+        # end
+        # compact_fields = [Float64, Bool]
+        # ```
+        # In this case, we want to replace the `Bool` with `Float64`.
+        #
+        # (2): We have
+        # ```
+        # struct B
+        #     a::Float64
+        #     b::Float64
+        # end
+        # struct A
+        #     a::Float64
+        #     b::Bool
+        # end
+        # compact_fields = [Float64, Float64]
+        # ```
+        # In this case, we simply reuse the `Float64`
+        #
+        # To handle these two cases, we just need to lexicographically sort the
+        # concrete structs by their field sizes, i.e. (Float64, Bool) -> (8, 1).
+        # After the sorting, we only need to consider the easy-to-handle second
+        # case.
+        foreach(fts->sort!(fts[2], rev=true, by=x->sizeof(x[2])), Ss) # sort for each field by its size
+        function bylex(x)
+            _, fts = x
+            idxs = findall(isbitstype(t) for (f, t) in fts)
+            (map(i->sizeof(fts[i][2]), idxs)...,)
+        end
+        sort!(Ss, rev=true, by=bylex) # sort for each concrete type by the size of the first field
+
+        # We should never replace reuse fields in the same type, so we only
+        # search in previously added types.
+        searchsize = 0
+        for (S, fts) in Ss # for each concrete type
             fields = Symbol[]
             name_map = Dict{Symbol,Any}()
             S2fields[S] = fields, name_map
 
-            for f in cfields
-                f, t = isexpr(f, :(::)) ? (f.args[1], getproperty(mod, f.args[2])) : (f, t) # field and type
-
+            for (f, t) in fts # for each field
                 push!(fields, f)
                 if isempty(compact_fields) ||
                     !isconcretetype(t) ||
-                    (idx = findfirst(sizeof(t) <= sizeof(t′) for t′ in compact_types); idx === nothing)
+                    (idx = findfirst(sizeof(t) <= sizeof(t′) for t′ in view(compact_types, 1:searchsize)); idx === nothing)
                     # add new fields
                     #
                     # initialize or we cannot optimize this case
@@ -116,6 +167,8 @@ function _compactify(mod, block)
                     name_map[f] = compact_fields[idx], (compact_types[idx] => t)
                 end
             end
+
+            searchsize = length(compact_types)
         end
 
         for (f, t) in zip(compact_fields, compact_types)
