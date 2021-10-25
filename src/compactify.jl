@@ -26,6 +26,8 @@ end
 
 using Base.Meta: isexpr
 
+const VERY_BIG_SIZE_OF = 8000
+
 macro compactify(block)
     _compactify(__module__, block)
     nothing
@@ -91,9 +93,7 @@ function _compactify(mod, block)
 
         S2fields = Dict{
                         Symbol, # S: concrete type's name. We need this to later build getproperty
-                        Tuple{
-                              Vector{Symbol},Dict{Symbol,Any}
-                             }, # fieldnames, oldname => (newname, newtype=>oldtype)
+                        Dict{Symbol,Any}, # oldname => (newname, newtype=>oldtype)
                        }()
 
         Ss = [(S, [
@@ -135,11 +135,11 @@ function _compactify(mod, block)
         # concrete structs by their field sizes, i.e. (Float64, Bool) -> (8, 1).
         # After the sorting, we only need to consider the easy-to-handle second
         # case.
-        foreach(fts->sort!(fts[2], rev=true, by=x->sizeof(x[2])), Ss) # sort for each field by its size
+        foreach(fts->sort!(fts[2], rev=true, by=((_, t),)->sizeof(t) + VERY_BIG_SIZE_OF * isbitstype(t)), Ss) # sort for each field by its size
         function bylex(x)
             _, fts = x
-            idxs = findall(isbitstype(t) for (f, t) in fts)
-            (map(i->sizeof(fts[i][2]), idxs)...,)
+            idx = findlast(isbitstype(t) for (f, t) in fts)
+            idx === nothing ? (VERY_BIG_SIZE_OF,) : (map(i->sizeof(fts[i][2]), 1:idx)...,)
         end
         sort!(Ss, rev=true, by=bylex) # sort for each concrete type by the size of the first field
 
@@ -147,24 +147,20 @@ function _compactify(mod, block)
         # search in previously added types.
         searchsize = 0
         for (S, fts) in Ss # for each concrete type
-            fields = Symbol[]
             name_map = Dict{Symbol,Any}()
-            S2fields[S] = fields, name_map
+            S2fields[S] = name_map
 
             for (f, t) in fts # for each field
-                push!(fields, f)
-                if isempty(compact_fields) ||
-                    !isconcretetype(t) ||
-                    (idx = findfirst(sizeof(t) <= sizeof(t′) for t′ in view(compact_types, 1:searchsize)); idx === nothing)
-                    # add new fields
-                    #
+                reuse = reusefield(view(compact_types, 1:searchsize), view(compact_fields, 1:searchsize), f, t)
+                if reuse === nothing
                     # initialize or we cannot optimize this case
                     newname = gensym(f)
                     push!(compact_fields, newname)
                     push!(compact_types, t)
-                    name_map[f] = newname, t
+                    name_map[f] = newname, (t => t)
                 else # reuse old field
-                    name_map[f] = compact_fields[idx], (compact_types[idx] => t)
+                    newf, newt = reuse
+                    name_map[f] = newf, (newt => t)
                 end
             end
 
@@ -181,4 +177,20 @@ function _compactify(mod, block)
     end
 
     @show expr
+end
+
+function reusefield(compact_types, compact_fields, f, t)
+    if isempty(compact_types)
+        return nothing
+    elseif (isbits = isbitstype(t);
+            idx = findfirst(t == t′ || !(isbits || isbits(t′)) for t′ in compact_types);
+            idx !== nothing)
+        return compact_fields[idx], (compact_types[idx] => t)
+    elseif !isbits
+        return gensym(f), (t => Any)
+    elseif (idx = findfirst(isbitstype(t′) && sizeof(t) < sizeof(t′) for t′ in compact_types); idx !== nothing)
+        return compact_fields[idx], (compact_types[idx] => t)
+    else
+        return nothing
+    end
 end
