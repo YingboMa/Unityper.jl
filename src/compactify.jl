@@ -11,34 +11,55 @@ end
 struct B <: AT
     a::Int
     b::Float64
+    d::Complex # not isbits
 end
 struct C <: AT
     b::Float64
     d::Bool
-    e::Int
+    e::Float64
+    k::Complex{Real} # not isbits
 end
 struct D <: AT
-    b::Any
+    b::Any # not isbits
 end
 
+end
+
+=>
+
+@enum TAGS A B C D
+struct AT
+    tag::TAGS
+    common_field::Int
+    a::Bool
+    b::Int -> Float64
+    c::Float64
+    d::Any
 end
 =#
 
+# TODO: Constructors!!!!!!!!!!!!!
+
+# TODO: compactify Bools to flags
+# TODO: composite isbits conversion
+# TODO: aggregates isbits conversion (Maybe just NTuple{N, UInt64})
+# TODO: Better Enum
+
 using Base.Meta: isexpr
 
-const VERY_BIG_SIZE_OF = 8000
-
-macro compactify(block)
-    _compactify(__module__, block)
-    nothing
-    #block
+macro compactify(debug, block)
+    _compactify(__module__, block; debug=debug)
 end
 
-function _compactify(mod, block)
+macro compactify(block)
+    _compactify(__module__, block; debug=false)
+end
+
+function _compactify(mod, block; debug=false)
     isexpr(block, :block) || error("@compatify takes a block!")
     stmts = block.args
     hasabstract = false
-    abstract2concrete = Dict() # abstract type name => ismutable, body, [(name, concete fields), ...]
+    abstract2concrete = Dict() # abstract type name => ismutable, struct body, [(name, concete fields), ...]
     names = []
     # notation: T means abstract name, S means concrete name
     for ex in stmts; ex isa LineNumberNode && continue
@@ -66,7 +87,9 @@ function _compactify(mod, block)
                 ismut == ismutable || error("$S and $T should have the same mutability!")
                 push!(names, S)
                 fields = filter(x->!(x isa LineNumberNode), fields.args)
-                push!(abstract2concrete[T][end], (S, fields))
+                # destructs fields of the form `a::T` to field name and type.
+                fields = [isexpr(f, :(::)) ? (f.args[1], expr_to_type(mod, f.args[2])) : (f, Any) for f in fields]
+                push!(abstract2concrete[T][end], S => fields)
             end
         else
             error("What is this? $ex")
@@ -77,10 +100,43 @@ function _compactify(mod, block)
 
     expr = Expr(:block)
 
+    gensymidx = Ref(0)
+    gensym = let gensymidx = gensymidx
+        x -> Symbol("###$x###", (gensymidx[] += 1))
+    end
+
     for (T, (ismutable, struct_body, Ss)) in pairs(abstract2concrete)
-        ex = Expr(:block)
-        enumtype = gensym("ENUM")
-        push!(ex.args, :(@enum $enumtype $(first.(Ss)...)))
+        enumtype = gensym("$T")
+        EnumNumType = Int32
+        # FIXME: ensure the numbering of enums
+        push!(expr.args, :(@enum $enumtype::$EnumNumType $(first.(Ss)...)))
+
+        push!(expr.args, struct_body)
+        if debug
+            @info "Parsed:"
+            Base.print_array(stdout, Ss); println()
+        end
+
+        isbits_S_ft = []
+        nonisbits_S_ft = []
+        max_num_isbits = max_num_nonisbits = 0
+        for S #=S: struct name | f: field name | t: field type=# in Ss
+            S, fts = S
+            isbits_ft = []
+            nonisbits_ft = []
+            push!(isbits_S_ft, S => isbits_ft)
+            push!(nonisbits_S_ft, S => nonisbits_ft)
+            for (f, t) in fts
+                if isbitstype(t)
+                    push!(isbits_ft, (f, t))
+                else
+                    push!(nonisbits_ft, (f, t))
+                end
+            end
+            max_num_isbits = max(max_num_isbits, length(isbits_ft))
+            max_num_nonisbits = max(max_num_nonisbits, length(nonisbits_ft))
+            sort!(isbits_ft, by=sizeof ∘ last, rev=true)
+        end
 
         # common fields in the abstract type T
         common_fields = [
@@ -88,102 +144,141 @@ function _compactify(mod, block)
                          for f in filter(x->!(x isa LineNumberNode), struct_body.args[3].args)
                         ]
 
-        compact_fields = []
-        compact_types = []
-
+        #compact_fields = []
+        #compact_types = []
         S2fields = Dict{
                         Symbol, # S: concrete type's name. We need this to later build getproperty
+                                          # :a => (:b, Any=>Complex)
                         Dict{Symbol,Any}, # oldname => (newname, newtype=>oldtype)
                        }()
-
-        Ss = [(S, [
-                   isexpr(f, :(::)) ? (f.args[1], getproperty(mod, f.args[2])) : (f, t) # field and type
-                   for f in cfields
-                  ])
-              for (S, cfields) in Ss]
-
-        # There are two cases which we want to compactify fields.
-        # (1): We have
-        # ```
-        # struct A
-        #     a::Float64
-        #     b::Bool
-        # end
-        # struct B
-        #     a::Float64
-        #     b::Float64
-        # end
-        # compact_fields = [Float64, Bool]
-        # ```
-        # In this case, we want to replace the `Bool` with `Float64`.
-        #
-        # (2): We have
-        # ```
-        # struct B
-        #     a::Float64
-        #     b::Float64
-        # end
-        # struct A
-        #     a::Float64
-        #     b::Bool
-        # end
-        # compact_fields = [Float64, Float64]
-        # ```
-        # In this case, we simply reuse the `Float64`
-        #
-        # To handle these two cases, we just need to lexicographically sort the
-        # concrete structs by their field sizes, i.e. (Float64, Bool) -> (8, 1).
-        # After the sorting, we only need to consider the easy-to-handle second
-        # case.
-        foreach(fts->sort!(fts[2], rev=true, by=((_, t),)->sizeof(t) + VERY_BIG_SIZE_OF * isbitstype(t)), Ss) # sort for each field by its size
-        function bylex(x)
-            _, fts = x
-            idx = findlast(isbitstype(t) for (f, t) in fts)
-            idx === nothing ? (VERY_BIG_SIZE_OF,) : (map(i->sizeof(fts[i][2]), 1:idx)...,)
+        #=
+        S2fields[:A] => ...
+        struct A <: S
+            a::T
         end
-        sort!(Ss, rev=true, by=bylex) # sort for each concrete type by the size of the first field
+        struct B <: S
+            a::T2
+        end
+        =#
 
-        # We should never replace reuse fields in the same type, so we only
-        # search in previously added types.
-        searchsize = 0
-        for (S, fts) in Ss # for each concrete type
-            name_map = Dict{Symbol,Any}()
-            S2fields[S] = name_map
-
-            for (f, t) in fts # for each field
-                reuse = reusefield(view(compact_types, 1:searchsize), view(compact_fields, 1:searchsize), f, t)
-                if reuse === nothing
-                    # initialize or we cannot optimize this case
-                    newname = gensym(f)
-                    push!(compact_fields, newname)
-                    push!(compact_types, t)
-                    name_map[f] = newname, (t => t)
-                else # reuse old field
-                    newf, newt = reuse
-                    name_map[f] = newf, (newt => t)
+        for i in 1:max_num_isbits
+            siz = idx = 0
+            for (j, (S, fts)) in enumerate(isbits_S_ft); i > length(fts) && continue
+                f, t = fts[i]
+                current_siz = sizeof(t)
+                if siz < current_siz
+                    siz = current_siz
+                    idx = j
                 end
             end
+            S, fts = isbits_S_ft[idx]
+            f, newtype = fts[i]
+            newname = gensym(f)
+            for (S, fts) in isbits_S_ft; i > length(fts) && continue
+                f, t = fts[i]
+                namemap = get!(() -> Dict{Symbol,Any}(), S2fields, S)
+                namemap[f] = (newname, newtype => t)
+            end
+            push!(struct_body.args[end].args, :($newname::$newtype))
 
-            searchsize = length(compact_types)
+            #push!(compact_fields, newname)
+            #push!(compact_types, newtype)
+        end
+        for i in 1:max_num_nonisbits
+            newtype = Any
+            newname = gensym("Any")
+            for (S, fts) in nonisbits_S_ft; i > length(fts) && continue
+                f, t = fts[i]
+                namemap = get!(() -> Dict{Symbol,Any}(), S2fields, S)
+                namemap[f] = (newname, newtype => t)
+            end
+            push!(struct_body.args[end].args, :($newname::$newtype))
         end
 
-        for (f, t) in zip(compact_fields, compact_types)
-            push!(struct_body.args[3].args, :($f::$t))
-        end
-        push!(ex.args, struct_body)
+        debug && @info "" isbits_S_ft nonisbits_S_ft
 
-        push!(expr.args, ex)
-        @info "" S2fields compact_fields compact_types
+        tagname = gensym("tag")
+        push!(struct_body.args[end].args, :($tagname::$enumtype))
+
+        # build getproperty
+        getprop = :(function (::$(typeof(getproperty)))(x::$T, s::$Symbol) end)
+        push!(expr.args, getprop)
+        body = getprop.args[end].args
+        push!(body, Expr(:meta, :inline))
+        ifold = expr
+        ifold_original = ifold
+        for cs in common_fields
+            uninitialized = expr === ifold
+            qncs = QuoteNode(cs)
+            behavior = Expr(:call, getfield, :x, qncs)
+            ifnew = Expr(ifelse(uninitialized, :if, :elseif), :(s === $qncs), behavior)
+            uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
+            uninitialized && (ifold_original = ifnew)
+            ifold = ifnew
+        end
+        for (S, namemap) in pairs(S2fields)
+            enum_num = EnumNumType(findfirst(x->x[1] == S, Ss) - 1)
+            # if we are simulating for type `S`.
+            behavior = expr
+            behavior_og = behavior
+            for (oldname, (newname, (newtype, oldtype))) in pairs(namemap)
+                uninitialized = expr === behavior
+                newf = QuoteNode(newname)
+                oldf = QuoteNode(oldname)
+                condition = :(s === $oldf)
+                behavior′ = :($getfield(x, $newf))
+                if newtype === Any
+                    behavior′ = :($behavior′::$oldtype)
+                else
+                    @assert isbitstype(oldtype) && isbitstype(newtype)
+                    behavior′ = :($reconstruct($oldtype, $behavior′)::$oldtype)
+                end
+                if uninitialized
+                    behavior_og = behavior = Expr(:if, condition, behavior′)
+                else
+                    ifnew = Expr(:elseif, condition, behavior′)
+                    push!(behavior.args, ifnew)
+                    behavior = ifnew
+                end
+            end
+            error_message = :($throw_no_field($(Val(S)), s))
+            condition = :($reinterpret($EnumNumType, $getfield(x, $(Meta.quot(tagname)))) === $enum_num)
+            uninitialized = expr === ifold
+            if behavior === expr
+                behavior_og = error_message
+            else
+                push!(behavior.args, error_message)
+            end
+            ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, behavior_og)
+            uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
+            ifold = ifnew
+        end
+        @assert expr !== ifold "no getproperty matches?"
     end
-
-    @show expr
+    esc(expr)
 end
+
+@generated function reconstruct(::Type{T}, x::S) where {T,S}
+    @assert isbitstype(T)
+    @assert sizeof(T) ≤ sizeof(S)
+    if sizeof(T) == 0
+        return T.instance
+    elseif sizeof(T) == sizeof(S)
+        return :(reinterpret($T, x))
+    else
+        IS = Symbol(:UInt, 8*sizeof(S))
+        IT = Symbol(:UInt, 8*sizeof(T))
+        return :(reinterpret($T, reinterpret($IS, x) % $IT))
+    end
+end
+
+@noinline throw_no_field(::Val{S}, s) where {S} = error("type $S has no field $s.")
 
 function reusefield(compact_types, compact_fields, f, t)
     if isempty(compact_types)
         return nothing
     elseif (isbits = isbitstype(t);
-            idx = findfirst(t == t′ || !(isbits || isbits(t′)) for t′ in compact_types);
+            idx = findfirst(t == t′ || !(isbits || isbitstype(t′)) for t′ in compact_types);
             idx !== nothing)
         return compact_fields[idx], (compact_types[idx] => t)
     elseif !isbits
@@ -194,3 +289,30 @@ function reusefield(compact_types, compact_fields, f, t)
         return nothing
     end
 end
+
+@nospecialize
+function expr_to_type(mod::Module, typ)
+    typ isa Symbol && return getproperty(mod, typ)
+    typ isa Expr || error("oof: $typ")
+    base = typ.args[1]
+    if base isa Symbol
+        baset = getproperty(mod, base)
+    else
+        @assert Meta.isexpr(base, :curly)
+        baset = expr_to_type(mod, base)
+    end
+    curlytypes = Vector{Any}(undef, length(typ.args)-1)
+    for i ∈ eachindex(curlytypes)
+        c = typ.args[1+i]
+        if c isa Symbol
+            curlytypes[i] = getproperty(mod, c)
+        elseif Meta.isexpr(base, :curly)
+            curlytypes[i] = expr_to_type(mod, c)
+        else
+            @assert isbitstype(c)
+            curlytypes[i] = c
+        end
+    end
+    baset{curlytypes...}
+end
+@specialize
