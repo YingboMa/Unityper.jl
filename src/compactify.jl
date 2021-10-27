@@ -43,7 +43,6 @@ end
 # TODO: compactify Bools to flags
 # TODO: composite isbits conversion
 # TODO: aggregates isbits conversion (Maybe just NTuple{N, UInt64})
-# TODO: Better Enum
 
 using Base.Meta: isexpr
 
@@ -108,8 +107,9 @@ function _compactify(mod, block; debug=false)
     for (T, (ismutable, struct_body, Ss)) in pairs(abstract2concrete)
         enumtype = gensym("$T")
         EnumNumType = Int32
-        # FIXME: ensure the numbering of enums
-        push!(expr.args, :(@enum $enumtype::$EnumNumType $(first.(Ss)...)))
+        # S1=0 S2=1 ...
+        enum_pairs = map(i->:($(Ss[i][1]) = $(EnumNumType(i-1))), 1:length(Ss))
+        push!(expr.args, :(@enum $enumtype::$EnumNumType $(enum_pairs...)))
 
         push!(expr.args, struct_body)
         if debug
