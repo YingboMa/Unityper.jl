@@ -1,43 +1,3 @@
-#=
-@compactify begin
-
-@abstract struct AT
-    common_field::Int
-end
-struct A <: AT
-    a::Bool
-    b::Int
-end
-struct B <: AT
-    a::Int
-    b::Float64
-    d::Complex # not isbits
-end
-struct C <: AT
-    b::Float64
-    d::Bool
-    e::Float64
-    k::Complex{Real} # not isbits
-end
-struct D <: AT
-    b::Any # not isbits
-end
-
-end
-
-=>
-
-@enum TAGS A B C D
-struct AT
-    tag::TAGS
-    common_field::Int
-    a::Bool
-    b::Int -> Float64
-    c::Float64
-    d::Any
-end
-=#
-
 # TODO: Constructors!!!!!!!!!!!!!
 
 # TODO: compactify Bools to flags
@@ -67,6 +27,9 @@ function _compactify(mod, block; debug=false)
             struct_body = ex.args[3]
             @assert isexpr(struct_body, :struct)
             ismutable, T, fields = struct_body.args
+            if isexpr(T, :<:) # if there's a super type
+                T = T.args[1]
+            end
             if T in names
                 error("$T struct is already defined")
             else
