@@ -117,10 +117,33 @@ function _compactify(mod, block; debug=false)
             Base.print_array(stdout, Ss); println()
         end
 
+        # S: struct name | f: field name | t: field type
+        #
+        # For non-isbits types, we just make them `Any` and type assert it in
+        # the `getproperty` function.
+        #
+        # First: we initially have something like
+        #   sz\S   S1       S2       S3       S4
+        #  sizeof  8        8        1        1
+        #  sizeof  8        Any      1        1
+        #  sizeof  4        1        4        1
+        #  sizeof  1        2        8        4
+        #  sizeof  2        Any               Any
+        #
+        # Here, we sort the isbits' field size (the first dim) and separate
+        # non-isbits fields. We then have:
+        #   sz\S   S1       S2       S3       S4
+        #  sizeof  8        8        8        4
+        #  sizeof  8        2        4        1
+        #  sizeof  4        1        1        1
+        #  sizeof  2                 1        1
+        #  sizeof  1
+        #  Anys             x                 x
+        #  Anys             x
         isbits_S_ft = []
         nonisbits_S_ft = []
         max_num_isbits = max_num_nonisbits = 0
-        for S #=S: struct name | f: field name | t: field type=# in Ss
+        for S in Ss
             S, fts = S
             isbits_ft = []
             nonisbits_ft = []
@@ -144,23 +167,25 @@ function _compactify(mod, block; debug=false)
                          for f in filter(x->!(x isa LineNumberNode), struct_body.args[3].args)
                         ]
 
-        #compact_fields = []
-        #compact_types = []
+        # This structure is needed to generate `getproperty` to simulate the
+        # `Ss` types.
         S2fields = Dict{
                         Symbol, # S: concrete type's name. We need this to later build getproperty
                                           # :a => (:b, Any=>Complex)
                         Dict{Symbol,Any}, # oldname => (newname, newtype=>oldtype)
                        }()
-        #=
-        S2fields[:A] => ...
-        struct A <: S
-            a::T
-        end
-        struct B <: S
-            a::T2
-        end
-        =#
 
+        # We then just need to read-off the sorted fields by taking the max
+        # horizonally.
+        #
+        #   sz\S   S1       S2       S3       S4    [compactified]
+        #  sizeof  8        8        8        4           8
+        #  sizeof  8        2        4        1           8
+        #  sizeof  4        1        1        1           4
+        #  sizeof  2                 1        1           2
+        #  sizeof  1                                      1
+        #  Anys             x                 x           x
+        #  Anys             x                             x
         for i in 1:max_num_isbits
             siz = idx = 0
             for (j, (S, fts)) in enumerate(isbits_S_ft); i > length(fts) && continue
@@ -180,9 +205,6 @@ function _compactify(mod, block; debug=false)
                 namemap[f] = (newname, newtype => t)
             end
             push!(struct_body.args[end].args, :($newname::$newtype))
-
-            #push!(compact_fields, newname)
-            #push!(compact_types, newtype)
         end
         for i in 1:max_num_nonisbits
             newtype = Any
@@ -255,7 +277,9 @@ function _compactify(mod, block; debug=false)
         end
         @assert expr !== ifold "no getproperty matches?"
     end
-    esc(expr)
+    expr = esc(expr)
+    debug && print(expr)
+    expr
 end
 
 @generated function reconstruct(::Type{T}, x::S) where {T,S}
@@ -273,22 +297,6 @@ end
 end
 
 @noinline throw_no_field(::Val{S}, s) where {S} = error("type $S has no field $s.")
-
-function reusefield(compact_types, compact_fields, f, t)
-    if isempty(compact_types)
-        return nothing
-    elseif (isbits = isbitstype(t);
-            idx = findfirst(t == t′ || !(isbits || isbitstype(t′)) for t′ in compact_types);
-            idx !== nothing)
-        return compact_fields[idx], (compact_types[idx] => t)
-    elseif !isbits
-        return gensym(f), (t => Any)
-    elseif (idx = findfirst(isbitstype(t′) && sizeof(t) < sizeof(t′) for t′ in compact_types); idx !== nothing)
-        return compact_fields[idx], (compact_types[idx] => t)
-    else
-        return nothing
-    end
-end
 
 @nospecialize
 function expr_to_type(mod::Module, typ)
