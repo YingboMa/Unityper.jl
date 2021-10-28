@@ -83,8 +83,11 @@ function _compactify(mod, block; debug=false)
         # S1=0 S2=1 ...
         # We need some very weird names so there won't be a name collision.
         # @enum doesn't work with var"##xy".
-        enum_pairs = map(i->:($(Symbol(:₋₃₋₁₂₉, T, :₋__, Ss[i][1], :₋₃₋₁₉₉₂₋₋)) = $(EnumNumType(i-1))), 1:length(Ss))
-        push!(expr.args, :(@enum $EnumType::$EnumNumType $(enum_pairs...)))
+        enum_expr = :(@enum $EnumType::$EnumNumType)
+        for i in 1:length(Ss)
+            push!(enum_expr.args, :($(Symbol(:₋₃₋₁₂₉, T, :₋__, Ss[i][1], :₋₃₋₁₉₉₂₋₋)) = $(EnumNumType(i-1))))
+        end
+        push!(expr.args, enum_expr)
 
         push!(expr.args, struct_body)
         if debug
