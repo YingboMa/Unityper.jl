@@ -30,29 +30,27 @@ function _compactify(mod, block; debug=false)
             if isexpr(T, :<:) # if there's a super type
                 T = T.args[1]
             end
-            if T in names
-                error("$T struct is already defined")
-            else
-                push!(names, T)
-                abstract2concrete[T] = ismutable, struct_body, []
-            end
+            T in names && error("$T struct is already defined")
+
+            field2val = parse_default_value!(struct_body)
+            push!(names, T)
+            abstract2concrete[T] = ismutable, struct_body, field2val, []
         elseif isexpr(ex, :struct)
             struct_body = ex
+            field2val = parse_default_value!(struct_body)
             ismutable, S, fields = struct_body.args
             isexpr(S, :(<:)) || error("$S must be a subtype of some @abstract type!")
             S, T = S.args
-            if S in names
-                error("$S struct is already defined")
-            else
-                T in keys(abstract2concrete) || error("$T >: $S is not a @abstract type.")
-                ismut, = abstract2concrete[T]
-                ismut == ismutable || error("$S and $T should have the same mutability!")
-                push!(names, S)
-                fields = filter(x->!(x isa LineNumberNode), fields.args)
-                # destructs fields of the form `a::T` to field name and type.
-                fields = [isexpr(f, :(::)) ? (f.args[1], expr_to_type(mod, f.args[2])) : (f, Any) for f in fields]
-                push!(abstract2concrete[T][end], S => fields)
-            end
+            S in names && error("$S struct is already defined")
+
+            T in keys(abstract2concrete) || error("$T >: $S is not a @abstract type.")
+            ismut, = abstract2concrete[T]
+            ismut == ismutable || error("$S and $T should have the same mutability!")
+            push!(names, S)
+            fields = filter(x->!(x isa LineNumberNode), fields.args)
+            # destructs fields of the form `a::T` to field name and type.
+            fields = [isexpr(f, :(::)) ? (f.args[1], expr_to_type(mod, f.args[2])) : (f, Any) for f in fields]
+            push!(abstract2concrete[T][end], (S, fields, field2val))
         else
             error("What is this? $ex")
         end
@@ -67,12 +65,14 @@ function _compactify(mod, block; debug=false)
         x -> Symbol("###$x###", (gensymidx[] += 1))
     end
 
-    for (T, (ismutable, struct_body, Ss)) in pairs(abstract2concrete)
-        enumtype = gensym("$T")
+    for (T, (ismutable, struct_body, T_field2val, Ss)) in pairs(abstract2concrete)
+        EnumType = gensym(T)
         EnumNumType = Int32
         # S1=0 S2=1 ...
-        enum_pairs = map(i->:($(Ss[i][1]) = $(EnumNumType(i-1))), 1:length(Ss))
-        push!(expr.args, :(@enum $enumtype::$EnumNumType $(enum_pairs...)))
+        # We need some very weird names so there won't be a name collision.
+        # @enum doesn't work with var"##xy".
+        enum_pairs = map(i->:($(Symbol(:₋₃₋₁₂₉, T, :₋__, Ss[i][1], :₋₃₋₁₉₉₂₋₋)) = $(EnumNumType(i-1))), 1:length(Ss))
+        push!(expr.args, :(@enum $EnumType::$EnumNumType $(enum_pairs...)))
 
         push!(expr.args, struct_body)
         if debug
@@ -107,7 +107,7 @@ function _compactify(mod, block; debug=false)
         nonisbits_S_ft = []
         max_num_isbits = max_num_nonisbits = 0
         for S in Ss
-            S, fts = S
+            S, fts, S_field2val = S
             isbits_ft = []
             nonisbits_ft = []
             push!(isbits_S_ft, S => isbits_ft)
@@ -134,9 +134,13 @@ function _compactify(mod, block; debug=false)
         # `Ss` types.
         S2fields = Dict{
                         Symbol, # S: concrete type's name. We need this to later build getproperty
-                                          # :a => (:b, Any=>Complex)
-                        Dict{Symbol,Any}, # oldname => (newname, newtype=>oldtype)
+                                          # :a => (:b, Any, Complex)
+                        Dict{Symbol,Any}, # oldname => (newname, newtype, oldtype)
                        }()
+        # This structure is needed to generate constructors.
+        back_edges = Dict{Symbol,Any}() # newname => [(S, oldname, oldtype), ...]
+        compact_fields = Symbol[]
+        compact_types = []
 
         # We then just need to read-off the sorted fields by taking the max
         # horizonally.
@@ -162,28 +166,36 @@ function _compactify(mod, block; debug=false)
             S, fts = isbits_S_ft[idx]
             f, newtype = fts[i]
             newname = gensym(f)
+            edgs = back_edges[newname] = []
             for (S, fts) in isbits_S_ft; i > length(fts) && continue
                 f, t = fts[i]
                 namemap = get!(() -> Dict{Symbol,Any}(), S2fields, S)
-                namemap[f] = (newname, newtype => t)
+                namemap[f] = (newname, newtype, t)
+                push!(edgs, (S, f, t))
             end
+            push!(compact_fields, newname)
+            push!(compact_types, newtype)
             push!(struct_body.args[end].args, :($newname::$newtype))
         end
         for i in 1:max_num_nonisbits
             newtype = Any
             newname = gensym("Any")
+            edgs = back_edges[newname] = []
             for (S, fts) in nonisbits_S_ft; i > length(fts) && continue
                 f, t = fts[i]
                 namemap = get!(() -> Dict{Symbol,Any}(), S2fields, S)
-                namemap[f] = (newname, newtype => t)
+                namemap[f] = (newname, newtype, t)
+                push!(edgs, (S, f, t))
             end
+            push!(compact_fields, newname)
+            push!(compact_types, newtype)
             push!(struct_body.args[end].args, :($newname::$newtype))
         end
 
         debug && @info "" isbits_S_ft nonisbits_S_ft
 
         tagname = gensym("tag")
-        push!(struct_body.args[end].args, :($tagname::$enumtype))
+        push!(struct_body.args[end].args, :($tagname::$EnumType))
 
         # build getproperty
         getprop = :(function (::$(typeof(getproperty)))(x::$T, s::$Symbol) end)
@@ -206,7 +218,7 @@ function _compactify(mod, block; debug=false)
             # if we are simulating for type `S`.
             behavior = expr
             behavior_og = behavior
-            for (oldname, (newname, (newtype, oldtype))) in pairs(namemap)
+            for (oldname, (newname, newtype, oldtype)) in pairs(namemap)
                 uninitialized = expr === behavior
                 newf = QuoteNode(newname)
                 oldf = QuoteNode(oldname)
@@ -239,6 +251,62 @@ function _compactify(mod, block; debug=false)
             ifold = ifnew
         end
         @assert expr !== ifold "no getproperty matches?"
+
+        # Let's now make the constructor
+        construct_args = []
+        append!(construct_args, common_fields)
+        append!(construct_args, compact_fields)
+
+        for (S, fts, S_field2val) in Ss
+            parameters = Expr(:parameters)
+            for f in common_fields
+                push!(parameters.args, Expr(:kw, f, T_field2val[f]))
+            end
+            for (f, _) in fts
+                push!(parameters.args, Expr(:kw, f, S_field2val[f]))
+            end
+
+            constructor = :(function $S($parameters) end)
+            constructor_body = constructor.args[end].args
+
+            # We check if the compact field is native in the struct S. If it is
+            # native, then we only need to translate oldname to the newname. If
+            # it is not native, then we need to set it to some default value.
+            for (newname, newtype) in zip(compact_fields, compact_types)
+                isany = newtype === Any
+                edgs = back_edges[newname]
+                is_native = false
+                for (S2, oldname, oldtype) in edgs
+                    if S2 === S
+                        is_native = true
+                        if isany # don't call simulate_type for Anys
+                            push!(constructor_body, :($newname = $oldname))
+                        else
+                            push!(constructor_body, :($newname = $simulate_type($newtype, $oldname)))
+                        end
+                        break
+                    end
+                end
+                is_native && continue
+                S2, oldname, oldtype = first(edgs)
+                idx = findfirst(x->x[1] === S2, Ss)
+                defval = Ss[idx][3][oldname]
+                if isany # don't call simulate_type for Anys
+                    push!(constructor_body, :($newname = $defval))
+                else
+                    push!(constructor_body, :($newname = $simulate_type($newtype, $defval)))
+                end
+            end
+
+            # call the real constructor.
+            construct_expr = Expr(:call, T)
+            append!(construct_expr.args, construct_args)
+            # the type tag is the last arg
+            enum_num = EnumNumType(findfirst(x->x[1] == S, Ss) - 1)
+            push!(construct_expr.args, Expr(:call, reinterpret, EnumType, enum_num))
+            push!(constructor_body, construct_expr)
+            push!(expr.args, constructor)
+        end
     end
     expr = esc(expr)
     debug && print(expr)
@@ -259,7 +327,36 @@ end
     end
 end
 
+@generated function simulate_type(::Type{T}, x::S) where {T,S}
+    @assert isbitstype(T)
+    @assert sizeof(T) ≥ sizeof(S)
+    if sizeof(T) == 0
+        return T.instance
+    elseif sizeof(T) == sizeof(S)
+        return :(reinterpret($T, x))
+    else
+        IS = Symbol(:UInt, 8*sizeof(S))
+        IT = Symbol(:UInt, 8*sizeof(T))
+        return :(reinterpret($T, $IT(reinterpret($IS, x))))
+    end
+end
+
+
 @noinline throw_no_field(::Val{S}, s) where {S} = error("type $S has no field $s.")
+
+function parse_default_value!(expr::Expr)
+    @assert isexpr(expr, :struct)
+    field2val = Dict{Symbol, Any}()
+    body = expr.args[end].args
+    for (i, ex) in enumerate(body); ex isa LineNumberNode && continue
+        isexpr(ex, :(=)) || error("$ex doesn't have a default value!")
+        ft, val = ex.args
+        body[i] = ft
+        f = isexpr(ft, :(::)) ? ft.args[1] : ft
+        field2val[f] = val
+    end
+    field2val
+end
 
 @nospecialize
 function expr_to_type(mod::Module, typ)
