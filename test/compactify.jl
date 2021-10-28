@@ -71,6 +71,42 @@ d = D()
 d = D(b=100)
 @test d.b === 100
 
+@test_throws Any @macroexpand @compactified a::AT begin
+    A => "A"
+    B => "B"
+    C => "C"
+    A => "D"
+end
+@test_throws Any @macroexpand @compactified a::AT begin
+    A => "A"
+    B => "B"
+    C => "C"
+end
+foo(a) = @compactified a::AT begin
+    A => "A"
+    B => "B"
+    C => "C"
+    D => "D"
+end
+@test foo(a) == "A"
+@test foo(b) == "B"
+@test foo(c) == "C"
+@test foo(d) == "D"
+
+@test_throws Any @macroexpand @compactified a::AT begin
+    A => "A"
+    _ => "B"
+    C => "C"
+end
+goo(a) = @compactified a::AT begin
+    A => "A"
+    _ => "B"
+end
+@test goo(a) == "A"
+@test goo(b) == "B"
+@test goo(c) == "B"
+@test goo(d) == "B"
+
 abstract type AAT end
 @compactify begin
     @abstract struct BT <: AAT

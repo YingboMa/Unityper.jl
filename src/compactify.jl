@@ -1,12 +1,21 @@
-# TODO: pattern matcher!!!
-#
 # TODO: compactify Bools to flags
 # TODO: composite isbits conversion
 # TODO: aggregates isbits conversion (Maybe just NTuple{N, UInt64})
 
 using Base.Meta: isexpr
 
+"""
+    subtypes_fun(::Val{T}) where T
+
+return the conceptual subtypes in `Symbol`s.
+"""
 function subtypes_fun end
+
+"""
+    isa_type_fun(::Val{T}, Val{S}, x)::Bool where {T, S}
+
+It checks if `x` is a `S <: T`, where `S` is a symbol and `T` is a type.
+"""
 function isa_type_fun end
 
 macro compactify(debug, block)
@@ -403,30 +412,3 @@ function parse_default_value!(expr::Expr)
     end
     field2val
 end
-
-@nospecialize
-function expr_to_type(mod::Module, typ)
-    typ isa Symbol && return getproperty(mod, typ)
-    typ isa Expr || error("oof: $typ")
-    base = typ.args[1]
-    if base isa Symbol
-        baset = getproperty(mod, base)
-    else
-        @assert Meta.isexpr(base, :curly)
-        baset = expr_to_type(mod, base)
-    end
-    curlytypes = Vector{Any}(undef, length(typ.args)-1)
-    for i ∈ eachindex(curlytypes)
-        c = typ.args[1+i]
-        if c isa Symbol
-            curlytypes[i] = getproperty(mod, c)
-        elseif Meta.isexpr(base, :curly)
-            curlytypes[i] = expr_to_type(mod, c)
-        else
-            @assert isbitstype(c)
-            curlytypes[i] = c
-        end
-    end
-    baset{curlytypes...}
-end
-@specialize
