@@ -312,6 +312,29 @@ function _compactify(mod, block; debug=false)
             push!(constructor_body, construct_expr)
             push!(expr.args, constructor)
         end
+
+        # Let's do pretty print
+        pretty_print = :(function (::$(typeof(Base.show)))(io::$IO, ::$(MIME"text/plain"), obj::$T) end)
+        body = pretty_print.args[end].args
+        ifold = expr
+        for (S, fts, S_field2val) in Ss
+            uninitialized = ifold === expr
+            enum_num = EnumNumType(findfirst(x->x[1] == S, Ss) - 1)
+            enum = Expr(:call, reinterpret, EnumType, enum_num)
+            condition = :($enum === $getfield(obj, $(Meta.quot(tagname))))
+            behavior = Expr(:call, print, :io, Meta.quot(S), "(")
+            n = length(fts)
+            for (i, (f, _)) in enumerate(fts)
+                push!(behavior.args, :($getproperty(obj, $(Meta.quot(f)))))
+                i == n || push!(behavior.args, ", ")
+            end
+            push!(behavior.args, ")::")
+            push!(behavior.args, T)
+            ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, behavior)
+            uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
+            ifold = ifnew
+        end
+        push!(expr.args, pretty_print)
     end
     expr = esc(expr)
     debug && print(expr)
