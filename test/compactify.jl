@@ -31,6 +31,8 @@ at = AT(1, 1, 1.0, true, 1 + 1im, reinterpret(var"###AT###1", Int32(0)))
 @test at.b isa Int
 @test_throws Any at.c
 
+@test Unityper.subtypes_fun(Val(AT)) == (:A, :B, :C, :D)
+
 a = A()
 @test a.a
 @test a.b === 10
@@ -40,6 +42,8 @@ a = A(; a=false, b=42)
 io = IOBuffer()
 show(io, MIME"text/plain"(), a)
 @test String(take!(io)) == "A(a = false, b = 42)::AT"
+@test Unityper.isa_type_fun(Val(AT), Val(:A), a)
+@test !Unityper.isa_type_fun(Val(AT), Val(:D), a)
 
 b = B()
 @test b.a === 1
@@ -99,6 +103,7 @@ at = BT(1, 1, 1.0, true, 1 + 1im, reinterpret(var"###BT###1", Int32(0)))
 @test !at.a
 @test at.b isa Int
 @test_throws Any at.c
+@test Unityper.subtypes_fun(Val(BT)) == (:A1, :B1, :C1, :D1)
 
 a = A1()
 @test a.a
@@ -106,6 +111,10 @@ a = A1()
 a = A1(; a=false, b=42)
 @test !a.a
 @test a.b === 42
+@test_throws Any Unityper.isa_type_fun(Val(AT), Val(:A1), a)
+@test_throws Any Unityper.isa_type_fun(Val(BT), Val(:A), a)
+@test Unityper.isa_type_fun(Val(BT), Val(:A1), a)
+@test !Unityper.isa_type_fun(Val(BT), Val(:D1), a)
 
 b = B1()
 @test b.a === 1

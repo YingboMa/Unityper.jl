@@ -6,6 +6,9 @@
 
 using Base.Meta: isexpr
 
+function subtypes_fun end
+function isa_type_fun end
+
 macro compactify(debug, block)
     _compactify(__module__, block; debug=debug)
 end
@@ -338,6 +341,17 @@ function _compactify(mod, block; debug=false)
             ifold = ifnew
         end
         push!(expr.args, pretty_print)
+
+        # Let's generate `subtypes`-like function.
+        subtypes_fun_expr = :((::$(typeof(subtypes_fun)))(::$Val{T}) where {T<:$T} = $([x[1] for x in Ss]...,))
+        push!(expr.args, subtypes_fun_expr)
+        # Let's generate `isa S` checking functions
+        for (S, fts, S_field2val) in Ss
+            isa_fun = :(function (::$(typeof(isa_type_fun)))(::$Val{T}, ::$Val{$(Meta.quot(S))}, x) where {T<:$T}
+                            $reinterpret($EnumNumType, $getfield(x, $tagname_q)) === $(S2enum_num[S])
+                        end)
+            push!(expr.args, isa_fun)
+        end
     end
     expr = esc(expr)
     debug && print(expr)
