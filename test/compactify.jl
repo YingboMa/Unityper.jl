@@ -39,7 +39,7 @@ a = A(; a=false, b=42)
 @test a.b === 42
 io = IOBuffer()
 show(io, MIME"text/plain"(), a)
-@test String(take!(io)) == "A(false, 42)::AT"
+@test String(take!(io)) == "A(a = false, b = 42)::AT"
 
 b = B()
 @test b.a === 1

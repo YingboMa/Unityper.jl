@@ -195,6 +195,7 @@ function _compactify(mod, block; debug=false)
         debug && @info "" isbits_S_ft nonisbits_S_ft
 
         tagname = gensym("tag")
+        tagname_q = Meta.quot(tagname)
         push!(struct_body.args[end].args, :($tagname::$EnumType))
 
         # build getproperty
@@ -244,7 +245,7 @@ function _compactify(mod, block; debug=false)
                 end
             end
             error_message = :($throw_no_field($(Val(S)), s))
-            condition = :($reinterpret($EnumNumType, $getfield(x, $(Meta.quot(tagname)))) === $enum_num)
+            condition = :($reinterpret($EnumNumType, $getfield(x, $tagname_q)) === $enum_num)
             uninitialized = expr === ifold
             if behavior === expr
                 behavior_og = error_message
@@ -321,11 +322,14 @@ function _compactify(mod, block; debug=false)
             uninitialized = ifold === expr
             enum_num = EnumNumType(findfirst(x->x[1] == S, Ss) - 1)
             enum = Expr(:call, reinterpret, EnumType, enum_num)
-            condition = :($enum === $getfield(obj, $(Meta.quot(tagname))))
+            condition = :($enum === $getfield(obj, $tagname_q))
             behavior = Expr(:call, print, :io, Meta.quot(S), "(")
             n = length(fts)
             for (i, (f, _)) in enumerate(fts)
-                push!(behavior.args, :($getproperty(obj, $(Meta.quot(f)))))
+                f = Meta.quot(f)
+                push!(behavior.args, f)
+                push!(behavior.args, " = ")
+                push!(behavior.args, :($getproperty(obj, $f)))
                 i == n || push!(behavior.args, ", ")
             end
             push!(behavior.args, ")::")
