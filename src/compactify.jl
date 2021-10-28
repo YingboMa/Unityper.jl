@@ -1,5 +1,5 @@
-# TODO: Constructors!!!!!!!!!!!!!
-
+# TODO: pattern matcher!!!
+#
 # TODO: compactify Bools to flags
 # TODO: composite isbits conversion
 # TODO: aggregates isbits conversion (Maybe just NTuple{N, UInt64})
@@ -79,6 +79,8 @@ function _compactify(mod, block; debug=false)
             @info "Parsed:"
             Base.print_array(stdout, Ss); println()
         end
+
+        S2enum_num = Dict{Symbol, EnumNumType}(S => EnumNumType(i-1) for (i, (S, )) in enumerate(Ss))
 
         # S: struct name | f: field name | t: field type
         #
@@ -215,7 +217,6 @@ function _compactify(mod, block; debug=false)
             ifold = ifnew
         end
         for (S, namemap) in pairs(S2fields)
-            enum_num = EnumNumType(findfirst(x->x[1] == S, Ss) - 1)
             # if we are simulating for type `S`.
             behavior = expr
             behavior_og = behavior
@@ -245,7 +246,7 @@ function _compactify(mod, block; debug=false)
                 end
             end
             error_message = :($throw_no_field($(Val(S)), s))
-            condition = :($reinterpret($EnumNumType, $getfield(x, $tagname_q)) === $enum_num)
+            condition = :($reinterpret($EnumNumType, $getfield(x, $tagname_q)) === $(S2enum_num[S]))
             uninitialized = expr === ifold
             if behavior === expr
                 behavior_og = error_message
@@ -308,8 +309,7 @@ function _compactify(mod, block; debug=false)
             construct_expr = Expr(:call, T)
             append!(construct_expr.args, construct_args)
             # the type tag is the last arg
-            enum_num = EnumNumType(findfirst(x->x[1] == S, Ss) - 1)
-            push!(construct_expr.args, Expr(:call, reinterpret, EnumType, enum_num))
+            push!(construct_expr.args, Expr(:call, reinterpret, EnumType, S2enum_num[S]))
             push!(constructor_body, construct_expr)
             push!(expr.args, constructor)
         end
@@ -320,8 +320,7 @@ function _compactify(mod, block; debug=false)
         ifold = expr
         for (S, fts, S_field2val) in Ss
             uninitialized = ifold === expr
-            enum_num = EnumNumType(findfirst(x->x[1] == S, Ss) - 1)
-            enum = Expr(:call, reinterpret, EnumType, enum_num)
+            enum = Expr(:call, reinterpret, EnumType, S2enum_num[S])
             condition = :($enum === $getfield(obj, $tagname_q))
             behavior = Expr(:call, print, :io, Meta.quot(S), "(")
             n = length(fts)
