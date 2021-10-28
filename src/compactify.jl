@@ -225,7 +225,12 @@ function _compactify(mod, block; debug=false)
                 condition = :(s === $oldf)
                 behavior′ = :($getfield(x, $newf))
                 if newtype === Any
-                    behavior′ = :($behavior′::$oldtype)
+                    # type assert doesn't really work here, because
+                    # (1+1im)::Complex{Real} errors. Alternatively, we could add
+                    # `convert(Complex{Real}, 1+1im)` but this is even worse as
+                    # it allocates. So for the time being, we will not check the
+                    # type and just return.
+                    behavior′ = :($behavior′)
                 else
                     @assert isbitstype(oldtype) && isbitstype(newtype)
                     behavior′ = :($reconstruct($oldtype, $behavior′)::$oldtype)
@@ -343,6 +348,7 @@ end
 
 
 @noinline throw_no_field(::Val{S}, s) where {S} = error("type $S has no field $s.")
+@noinline throw_type_error(::Val{S}, s) where {S} = error("Expected $S, got $s::$(typeof(s)).")
 
 function parse_default_value!(expr::Expr)
     @assert isexpr(expr, :struct)
