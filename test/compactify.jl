@@ -177,3 +177,22 @@ d = D1()
 @test d.b == "hi"
 d = D1(b=100)
 @test d.b === 100
+
+
+@compactify begin
+    @abstract struct AT′{T}
+        common_field::Int = 0
+    end
+    struct A′{T} <: AT′{T}
+        a::Bool = true
+        b::Int = 10
+    end
+    struct B′{T} <: AT′{T}
+        a::Int = 1
+        b::Float64 = 1.0
+        d::Complex = 1 + 1.0im # not isbits
+    end
+end
+
+@test typeof(A′{Real}()) == AT′{Real}
+@test typeof(B′{Int}()) == AT′{Int}

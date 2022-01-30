@@ -26,6 +26,15 @@ macro compactify(block)
     _compactify(__module__, block; debug=false)
 end
 
+function getname(T)
+    if T isa Symbol
+        return T
+    elseif T isa Expr
+        return T.head == :curly ? T.args[1] : error("$T as type name is not supported")
+    end
+end
+params(T) = isexpr(T, :curly) ? T.args[2:end] : ()
+
 function _compactify(mod, block; debug=false)
     isexpr(block, :block) || error("@compatify takes a block!")
     stmts = block.args
@@ -42,6 +51,7 @@ function _compactify(mod, block; debug=false)
             if isexpr(T, :<:) # if there's a super type
                 T = T.args[1]
             end
+            T = getname(T)
             T in names && error("$T struct is already defined")
 
             field2val = parse_default_value!(struct_body)
@@ -52,7 +62,9 @@ function _compactify(mod, block; debug=false)
             field2val = parse_default_value!(struct_body)
             ismutable, S, fields = struct_body.args
             isexpr(S, :(<:)) || error("$S must be a subtype of some @abstract type!")
-            S, T = S.args
+            S_with_params, T_with_params = S.args
+            S = getname(S_with_params)
+            T = getname(T_with_params)
             S in names && error("$S struct is already defined")
 
             T in keys(abstract2concrete) || error("$T >: $S is not a @abstract type.")
@@ -62,7 +74,7 @@ function _compactify(mod, block; debug=false)
             fields = filter(x->!(x isa LineNumberNode), fields.args)
             # destructs fields of the form `a::T` to field name and type.
             fields = [isexpr(f, :(::)) ? (f.args[1], expr_to_type(mod, f.args[2])) : (f, Any) for f in fields]
-            push!(abstract2concrete[T][end], (S, fields, field2val))
+            push!(abstract2concrete[T][end], (S, fields, field2val, S_with_params, T_with_params))
         else
             error("What is this? $ex")
         end
@@ -279,7 +291,7 @@ function _compactify(mod, block; debug=false)
         append!(construct_args, common_fields)
         append!(construct_args, compact_fields)
 
-        for (S, fts, S_field2val) in Ss
+        for (S, fts, S_field2val, S_with_params, T_with_params) in Ss
             parameters = Expr(:parameters)
             for f in common_fields
                 push!(parameters.args, Expr(:kw, f, T_field2val[f]))
@@ -288,8 +300,11 @@ function _compactify(mod, block; debug=false)
                 push!(parameters.args, Expr(:kw, f, S_field2val[f]))
             end
 
-            constructor = :(function $S($parameters) end)
-            constructor_body = constructor.args[end].args
+            constructor = quote
+                struct $S_with_params end
+                function (::Type{$S_with_params})($parameters) where {$(params(S_with_params)...)} end
+            end
+            constructor_body = constructor.args[end].args[end].args
 
             # We check if the compact field is native in the struct S. If it is
             # native, then we only need to translate oldname to the newname. If
@@ -321,7 +336,7 @@ function _compactify(mod, block; debug=false)
             end
 
             # call the real constructor.
-            construct_expr = Expr(:call, T)
+            construct_expr = Expr(:call, T_with_params)
             append!(construct_expr.args, construct_args)
             # the type tag is the last arg
             push!(construct_expr.args, Expr(:call, reinterpret, EnumType, S2enum_num[S]))
