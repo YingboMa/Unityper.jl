@@ -194,5 +194,12 @@ d = D1(b=100)
     end
 end
 
+a = A′{Int}()
+@compactified a::AT′ begin
+    A′ => "A"
+    B′ => "B"
+    _ => error("unreachable")
+end
+
 @test typeof(A′{Real}()) == AT′{Real}
 @test typeof(B′{Int}()) == AT′{Int}

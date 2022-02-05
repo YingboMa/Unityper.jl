@@ -18,12 +18,24 @@ It checks if `x` is a `S <: T`, where `S` is a symbol and `T` is a type.
 """
 function isa_type_fun end
 
-macro compactify(debug, block)
-    _compactify(__module__, block; debug=debug)
-end
-
-macro compactify(block)
-    _compactify(__module__, block; debug=false)
+"""
+    @compactify [show_methods=true] exprs
+"""
+macro compactify(exs...)
+    kws = []
+    arg = exs[end]
+    for i in 1:length(exs)-1
+        x = exs[i]
+        if x isa Expr && x.head === :(=) # Keyword given of the form "foo=bar"
+            if length(x.args) != 2
+                return Expr(:call, :error, "Invalid keyword argument: $x")
+            end
+            push!(kws, x.args[1] => x.args[2])
+        else
+            return Expr(:call, :error, "@$fcn expects only one non-keyword argument")
+        end
+    end
+    _compactify(__module__, arg; debug=false, kws...)
 end
 
 function getname(T)
@@ -35,7 +47,7 @@ function getname(T)
 end
 params(T) = isexpr(T, :curly) ? T.args[2:end] : ()
 
-function _compactify(mod, block; debug=false)
+function _compactify(mod, block; debug=false, show_methods=true)
     isexpr(block, :block) || error("@compatify takes a block!")
     stmts = block.args
     hasabstract = false
@@ -301,7 +313,7 @@ function _compactify(mod, block; debug=false)
             end
 
             constructor = quote
-                struct $S_with_params end
+                struct $S_with_params 1+1 end
                 function (::Type{$S_with_params})($parameters) where {$(params(S_with_params)...)} end
             end
             constructor_body = constructor.args[end].args[end].args
@@ -344,30 +356,32 @@ function _compactify(mod, block; debug=false)
             push!(expr.args, constructor)
         end
 
-        # Let's do pretty print
-        pretty_print = :(function (::$(typeof(Base.show)))(io::$IO, ::$(MIME"text/plain"), obj::$T) end)
-        body = pretty_print.args[end].args
-        ifold = expr
-        for (S, fts, S_field2val) in Ss
-            uninitialized = ifold === expr
-            enum = Expr(:call, reinterpret, EnumType, S2enum_num[S])
-            condition = :($enum === $getfield(obj, $tagname_q))
-            behavior = Expr(:call, print, :io, Meta.quot(S), "(")
-            n = length(fts)
-            for (i, (f, _)) in enumerate(fts)
-                f = Meta.quot(f)
-                push!(behavior.args, f)
-                push!(behavior.args, " = ")
-                push!(behavior.args, :($getproperty(obj, $f)))
-                i == n || push!(behavior.args, ", ")
+        if show_methods
+            # Let's do pretty print
+            pretty_print = :(function (::$(typeof(Base.show)))(io::$IO, ::$(MIME"text/plain"), obj::$T) end)
+            body = pretty_print.args[end].args
+            ifold = expr
+            for (S, fts, S_field2val) in Ss
+                uninitialized = ifold === expr
+                enum = Expr(:call, reinterpret, EnumType, S2enum_num[S])
+                condition = :($enum === $getfield(obj, $tagname_q))
+                behavior = Expr(:call, print, :io, Meta.quot(S), "(")
+                n = length(fts)
+                for (i, (f, _)) in enumerate(fts)
+                    f = Meta.quot(f)
+                    push!(behavior.args, f)
+                    push!(behavior.args, " = ")
+                    push!(behavior.args, :($getproperty(obj, $f)))
+                    i == n || push!(behavior.args, ", ")
+                end
+                push!(behavior.args, ")::")
+                push!(behavior.args, T)
+                ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, behavior)
+                uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
+                ifold = ifnew
             end
-            push!(behavior.args, ")::")
-            push!(behavior.args, T)
-            ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, behavior)
-            uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
-            ifold = ifnew
+            push!(expr.args, pretty_print)
         end
-        push!(expr.args, pretty_print)
 
         # Let's generate `subtypes`-like function.
         subtypes_fun_expr = :((::$(typeof(subtypes_fun)))(::$Val{T}) where {T<:$T} = $([x[1] for x in Ss]...,))
