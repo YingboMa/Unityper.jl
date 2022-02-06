@@ -1,7 +1,7 @@
 name = "Unityper"
 uuid = "a7c27f48-0311-42f6-a7f8-2c11e75eb415"
 authors = ["Yingbo Ma <mayingbo5@gmail.com>, Chris Elrod <elrodc@gmail.com>, and contributors"]
-version = "0.1.0"
+version = "0.1.1"
 
 [compat]
 julia = "1.3"
