@@ -18,15 +18,36 @@ It checks if `x` is a `S <: T`, where `S` is a symbol and `T` is a type.
 """
 function isa_type_fun end
 
-macro compactify(debug, block)
-    _compactify(__module__, block; debug=debug)
+"""
+    @compactify [show_methods=true] exprs
+"""
+macro compactify(exs...)
+    kws = []
+    arg = exs[end]
+    for i in 1:length(exs)-1
+        x = exs[i]
+        if x isa Expr && x.head === :(=) # Keyword given of the form "foo=bar"
+            if length(x.args) != 2
+                return Expr(:call, :error, "Invalid keyword argument: $x")
+            end
+            push!(kws, x.args[1] => x.args[2])
+        else
+            return Expr(:call, :error, "@$fcn expects only one non-keyword argument")
+        end
+    end
+    _compactify(__module__, arg; debug=false, kws...)
 end
 
-macro compactify(block)
-    _compactify(__module__, block; debug=false)
+function getname(T)
+    if T isa Symbol
+        return T
+    elseif T isa Expr
+        return T.head == :curly ? T.args[1] : error("$T as type name is not supported")
+    end
 end
+params(T) = isexpr(T, :curly) ? T.args[2:end] : ()
 
-function _compactify(mod, block; debug=false)
+function _compactify(mod, block; debug=false, show_methods=true)
     isexpr(block, :block) || error("@compatify takes a block!")
     stmts = block.args
     hasabstract = false
@@ -42,6 +63,7 @@ function _compactify(mod, block; debug=false)
             if isexpr(T, :<:) # if there's a super type
                 T = T.args[1]
             end
+            T = getname(T)
             T in names && error("$T struct is already defined")
 
             field2val = parse_default_value!(struct_body)
@@ -52,7 +74,9 @@ function _compactify(mod, block; debug=false)
             field2val = parse_default_value!(struct_body)
             ismutable, S, fields = struct_body.args
             isexpr(S, :(<:)) || error("$S must be a subtype of some @abstract type!")
-            S, T = S.args
+            S_with_params, T_with_params = S.args
+            S = getname(S_with_params)
+            T = getname(T_with_params)
             S in names && error("$S struct is already defined")
 
             T in keys(abstract2concrete) || error("$T >: $S is not a @abstract type.")
@@ -62,7 +86,7 @@ function _compactify(mod, block; debug=false)
             fields = filter(x->!(x isa LineNumberNode), fields.args)
             # destructs fields of the form `a::T` to field name and type.
             fields = [isexpr(f, :(::)) ? (f.args[1], expr_to_type(mod, f.args[2])) : (f, Any) for f in fields]
-            push!(abstract2concrete[T][end], (S, fields, field2val))
+            push!(abstract2concrete[T][end], (S, fields, field2val, S_with_params, T_with_params))
         else
             error("What is this? $ex")
         end
@@ -279,7 +303,7 @@ function _compactify(mod, block; debug=false)
         append!(construct_args, common_fields)
         append!(construct_args, compact_fields)
 
-        for (S, fts, S_field2val) in Ss
+        for (S, fts, S_field2val, S_with_params, T_with_params) in Ss
             parameters = Expr(:parameters)
             for f in common_fields
                 push!(parameters.args, Expr(:kw, f, T_field2val[f]))
@@ -288,8 +312,11 @@ function _compactify(mod, block; debug=false)
                 push!(parameters.args, Expr(:kw, f, S_field2val[f]))
             end
 
-            constructor = :(function $S($parameters) end)
-            constructor_body = constructor.args[end].args
+            constructor = quote
+                struct $S_with_params 1+1 end
+                function (::Type{$S_with_params})($parameters) where {$(params(S_with_params)...)} end
+            end
+            constructor_body = constructor.args[end].args[end].args
 
             # We check if the compact field is native in the struct S. If it is
             # native, then we only need to translate oldname to the newname. If
@@ -321,7 +348,7 @@ function _compactify(mod, block; debug=false)
             end
 
             # call the real constructor.
-            construct_expr = Expr(:call, T)
+            construct_expr = Expr(:call, T_with_params)
             append!(construct_expr.args, construct_args)
             # the type tag is the last arg
             push!(construct_expr.args, Expr(:call, reinterpret, EnumType, S2enum_num[S]))
@@ -329,30 +356,32 @@ function _compactify(mod, block; debug=false)
             push!(expr.args, constructor)
         end
 
-        # Let's do pretty print
-        pretty_print = :(function (::$(typeof(Base.show)))(io::$IO, ::$(MIME"text/plain"), obj::$T) end)
-        body = pretty_print.args[end].args
-        ifold = expr
-        for (S, fts, S_field2val) in Ss
-            uninitialized = ifold === expr
-            enum = Expr(:call, reinterpret, EnumType, S2enum_num[S])
-            condition = :($enum === $getfield(obj, $tagname_q))
-            behavior = Expr(:call, print, :io, Meta.quot(S), "(")
-            n = length(fts)
-            for (i, (f, _)) in enumerate(fts)
-                f = Meta.quot(f)
-                push!(behavior.args, f)
-                push!(behavior.args, " = ")
-                push!(behavior.args, :($getproperty(obj, $f)))
-                i == n || push!(behavior.args, ", ")
+        if show_methods
+            # Let's do pretty print
+            pretty_print = :(function (::$(typeof(Base.show)))(io::$IO, ::$(MIME"text/plain"), obj::$T) end)
+            body = pretty_print.args[end].args
+            ifold = expr
+            for (S, fts, S_field2val) in Ss
+                uninitialized = ifold === expr
+                enum = Expr(:call, reinterpret, EnumType, S2enum_num[S])
+                condition = :($enum === $getfield(obj, $tagname_q))
+                behavior = Expr(:call, print, :io, Meta.quot(S), "(")
+                n = length(fts)
+                for (i, (f, _)) in enumerate(fts)
+                    f = Meta.quot(f)
+                    push!(behavior.args, f)
+                    push!(behavior.args, " = ")
+                    push!(behavior.args, :($getproperty(obj, $f)))
+                    i == n || push!(behavior.args, ", ")
+                end
+                push!(behavior.args, ")::")
+                push!(behavior.args, T)
+                ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, behavior)
+                uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
+                ifold = ifnew
             end
-            push!(behavior.args, ")::")
-            push!(behavior.args, T)
-            ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, behavior)
-            uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
-            ifold = ifnew
+            push!(expr.args, pretty_print)
         end
-        push!(expr.args, pretty_print)
 
         # Let's generate `subtypes`-like function.
         subtypes_fun_expr = :((::$(typeof(subtypes_fun)))(::$Val{T}) where {T<:$T} = $([x[1] for x in Ss]...,))
