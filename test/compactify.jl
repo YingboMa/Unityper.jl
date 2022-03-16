@@ -1,4 +1,4 @@
-using Unityper, Test
+using Unityper, Test, Setfield, ConstructionBase
 
 @compactify begin
     @abstract struct AT
@@ -203,3 +203,14 @@ end
 
 @test typeof(A′{Real}()) == AT′{Real}
 @test typeof(B′{Int}()) == AT′{Int}
+
+function ConstructionBase.setproperties_object(obj::AT′{T}, patch) where T
+    nt = getproperties(obj)
+    nt_new = merge(nt, patch)
+    Unityper.rt_constructor(obj){T}(;nt_new...)
+end
+
+@set! a.a = false
+@set! a.b = 1234
+@test !a.a
+@test a.b === 1234
