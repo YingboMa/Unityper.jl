@@ -20,6 +20,13 @@ It checks if `x` is a `S <: T`, where `S` is a symbol and `T` is a type.
 function isa_type_fun end
 
 """
+    rt_constructor(x)::Function where {T, S}
+
+Return the runtime constructor of `x`
+"""
+function rt_constructor end
+
+"""
     @compactify [show_methods=true] exprs
 """
 macro compactify(exs...)
@@ -259,6 +266,22 @@ function _compactify(mod, block; debug=false, show_methods=true)
             end
             nt = :($NamedTuple{$((names...,))}($tup))
             ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, nt)
+            uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
+            ifold = ifnew
+        end
+
+        # build rt_constructor
+        rt_fun = :(function (::$(typeof(rt_constructor)))(x::$T) end)
+        push!(expr.args, rt_fun)
+        body = rt_fun.args[end].args
+        push!(body, Expr(:meta, :inline))
+        ifold = expr
+        for (S, namemap) in pairs(S2fields)
+            # if we are simulating for type `S`.
+            error_message = :($unreachable())
+            condition = :($reinterpret($EnumNumType, $getfield(x, $tagname_q)) === $(S2enum_num[S]))
+            uninitialized = expr === ifold
+            ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, S)
             uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
             ifold = ifnew
         end
