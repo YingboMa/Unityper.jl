@@ -2,6 +2,7 @@
 # TODO: composite isbits conversion
 # TODO: aggregates isbits conversion (Maybe just NTuple{N, UInt64})
 
+import ConstructionBase
 using Base.Meta: isexpr
 
 """
@@ -239,6 +240,29 @@ function _compactify(mod, block; debug=false, show_methods=true)
         tagname_q = Meta.quot(tagname)
         push!(struct_body.args[end].args, :($tagname::$EnumType))
 
+
+        # build getproperties
+        propnames = :(function (::$(typeof(ConstructionBase.getproperties)))(x::$T) end)
+        push!(expr.args, propnames)
+        body = propnames.args[end].args
+        push!(body, Expr(:meta, :inline))
+        ifold = expr
+        for (S, namemap) in pairs(S2fields)
+            # if we are simulating for type `S`.
+            error_message = :($unreachable())
+            condition = :($reinterpret($EnumNumType, $getfield(x, $tagname_q)) === $(S2enum_num[S]))
+            uninitialized = expr === ifold
+            names = vcat(common_fields, map(first, collect(pairs(namemap))))
+            tup = Expr(:tuple)
+            for n in names
+                push!(tup.args, :($getproperty(x, $(QuoteNode(n)))))
+            end
+            nt = :($NamedTuple{$((names...,))}($tup))
+            ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, nt)
+            uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
+            ifold = ifnew
+        end
+
         # build getproperty
         getprop = :(function (::$(typeof(getproperty)))(x::$T, s::$Symbol) end)
         push!(expr.args, getprop)
@@ -388,9 +412,11 @@ function _compactify(mod, block; debug=false, show_methods=true)
         push!(expr.args, subtypes_fun_expr)
         # Let's generate `isa S` checking functions
         for (S, fts, S_field2val) in Ss
-            isa_fun = :(function (::$(typeof(isa_type_fun)))(::$Val{T}, ::$Val{$(Meta.quot(S))}, x) where {T<:$T}
+            isa_fun = :(
+                        function (::$(typeof(isa_type_fun)))(::$Val{T}, ::$Val{$(Meta.quot(S))}, x) where {T<:$T}
                             $reinterpret($EnumNumType, $getfield(x, $tagname_q)) === $(S2enum_num[S])
-                        end)
+                        end
+                       )
             push!(expr.args, isa_fun)
         end
     end
@@ -428,6 +454,7 @@ end
 end
 
 
+@noinline unreachable() = error("unreachable reached")
 @noinline throw_no_field(::Val{S}, s) where {S} = error("type $S has no field $s.")
 @noinline throw_type_error(::Val{S}, s) where {S} = error("Expected $S, got $s::$(typeof(s)).")
 
