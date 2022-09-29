@@ -40,7 +40,7 @@ macro compactify(exs...)
             end
             push!(kws, x.args[1] => x.args[2])
         else
-            return Expr(:call, :error, "@$fcn expects only one non-keyword argument")
+            return Expr(:call, :error, "@compactify expects only one non-keyword argument")
         end
     end
     _compactify(__module__, arg; debug=false, kws...)
@@ -404,30 +404,32 @@ function _compactify(mod, block; debug=false, show_methods=true)
         end
 
         if show_methods
-            # Let's do pretty print
-            pretty_print = :(function (::$(typeof(Base.show)))(io::$IO, ::$(MIME"text/plain"), obj::$T) end)
-            body = pretty_print.args[end].args
-            ifold = expr
-            for (S, fts, S_field2val) in Ss
-                uninitialized = ifold === expr
-                enum = Expr(:call, reinterpret, EnumType, S2enum_num[S])
-                condition = :($enum === $getfield(obj, $tagname_q))
-                behavior = Expr(:call, print, :io, Meta.quot(S), "(")
-                n = length(fts)
-                for (i, (f, _)) in enumerate(fts)
-                    f = Meta.quot(f)
-                    push!(behavior.args, f)
-                    push!(behavior.args, " = ")
-                    push!(behavior.args, :($getproperty(obj, $f)))
-                    i == n || push!(behavior.args, ", ")
+            # Let's do pretty print, 2-arg and 3-arg `show`
+            for pretty_print in [:(function (::$(typeof(Base.show)))(io::$IO, obj::$T) end),
+                                 :(function (::$(typeof(Base.show)))(io::$IO, ::$(MIME"text/plain"), obj::$T) end)]
+                body = pretty_print.args[end].args
+                ifold = expr
+                for (S, fts, S_field2val) in Ss
+                    uninitialized = ifold === expr
+                    enum = Expr(:call, reinterpret, EnumType, S2enum_num[S])
+                    condition = :($enum === $getfield(obj, $tagname_q))
+                    behavior = Expr(:call, print, :io, Meta.quot(S), "(")
+                    n = length(fts)
+                    for (i, (f, _)) in enumerate(fts)
+                        f = Meta.quot(f)
+                        push!(behavior.args, f)
+                        push!(behavior.args, " = ")
+                        push!(behavior.args, :($getproperty(obj, $f)))
+                        i == n || push!(behavior.args, ", ")
+                    end
+                    push!(behavior.args, ")::")
+                    push!(behavior.args, T)
+                    ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, behavior)
+                    uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
+                    ifold = ifnew
                 end
-                push!(behavior.args, ")::")
-                push!(behavior.args, T)
-                ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, behavior)
-                uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
-                ifold = ifnew
+                push!(expr.args, pretty_print)
             end
-            push!(expr.args, pretty_print)
         end
 
         # Let's generate `subtypes`-like function.

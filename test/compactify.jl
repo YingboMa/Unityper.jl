@@ -39,9 +39,11 @@ a = A()
 a = A(; a=false, b=42)
 @test !a.a
 @test a.b === 42
-io = IOBuffer()
-show(io, MIME"text/plain"(), a)
-@test String(take!(io)) == "A(a = false, b = 42)::AT"
+# 3-arg show:
+@test sprint(show,  MIME"text/plain"(), a) == "A(a = false, b = 42)::AT"
+# 2-arg show:
+@test sprint(show, a) == "A(a = false, b = 42)::AT"
+@test sprint(show, [a]) == "AT[A(a = false, b = 42)::AT]"
 @test Unityper.isa_type_fun(Val(AT), Val(:A), a)
 @test !Unityper.isa_type_fun(Val(AT), Val(:D), a)
 
