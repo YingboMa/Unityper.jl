@@ -4,7 +4,7 @@ CurrentModule = Unityper
 
 # Unityper
 
-Documentation for [Unityper](https://github.com/Yingbo Ma/Unityper.jl).
+Documentation for [Unityper](https://github.com/YingboMa/Unityper.jl).
 
 ```@index
 ```
