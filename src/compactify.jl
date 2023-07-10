@@ -55,6 +55,11 @@ function getname(T)
 end
 params(T) = isexpr(T, :curly) ? T.args[2:end] : ()
 
+function _isconcretetype(::Type{T}) where {T}
+  Base.isconcretetype(T) || return false
+  all(_isconcretetype, fieldtypes(T))
+end
+
 function _compactify(mod, block; debug=false, show_methods=true)
     isexpr(block, :block) || error("@compatify takes a block!")
     stmts = block.args
@@ -318,7 +323,11 @@ function _compactify(mod, block; debug=false, show_methods=true)
                     # `convert(Complex{Real}, 1+1im)` but this is even worse as
                     # it allocates. So for the time being, we will not check the
                     # type and just return.
-                    behavior′ = :($behavior′)
+                    if _isconcretetype(oldtype)
+                        behavior′ = :($behavior′::$oldtype)
+                    else
+                        behavior′ = :($behavior′)
+                    end
                 else
                     @assert isbitstype(oldtype) && isbitstype(newtype)
                     behavior′ = :($reconstruct($oldtype, $behavior′)::$oldtype)
