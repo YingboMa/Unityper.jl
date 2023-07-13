@@ -60,13 +60,13 @@ c = C()
 @test c.b === 2.0
 @test !c.d
 @test c.e === 3.0
-@test c.k === 1 + 2im
+@test c.k === convert(Complex{Real}, 1 + 2im)
 
 c = C(b=8.0, d=true, e=5.0, k=10+10im)
 @test c.b === 8.0
 @test c.d
 @test c.e === 5.0
-@test c.k === 10 + 10im
+@test c.k === convert(Complex{Real}, 10 + 10im)
 
 d = D()
 @test d.b == "hi"
@@ -167,13 +167,13 @@ c = C1()
 @test c.b === 2.0
 @test !c.d
 @test c.e === 3.0
-@test c.k === 1 + 2im
+@test c.k === convert(Complex{Real}, 1 + 2im)
 
 c = C1(b=8.0, d=true, e=5.0, k=10+10im)
 @test c.b === 8.0
 @test c.d
 @test c.e === 5.0
-@test c.k === 10 + 10im
+@test c.k === convert(Complex{Real}, 10 + 10im)
 
 d = D1()
 @test d.b == "hi"
