@@ -53,18 +53,20 @@ b = B(a=12, b=2.0, d=2+1im)
 @test b.a === 12
 @test b.b === 2.0
 @test b.d === 2 + 1im
+@test B(a=12.0,b=2.0).a == 12
+@test_throws InexactError B(a=12.5,b=2.0)
 
 c = C()
 @test c.b === 2.0
 @test !c.d
 @test c.e === 3.0
-@test c.k === 1 + 2im
+@test c.k === convert(Complex{Real}, 1 + 2im)
 
 c = C(b=8.0, d=true, e=5.0, k=10+10im)
 @test c.b === 8.0
 @test c.d
 @test c.e === 5.0
-@test c.k === 10 + 10im
+@test c.k === convert(Complex{Real}, 10 + 10im)
 
 d = D()
 @test d.b == "hi"
@@ -165,13 +167,13 @@ c = C1()
 @test c.b === 2.0
 @test !c.d
 @test c.e === 3.0
-@test c.k === 1 + 2im
+@test c.k === convert(Complex{Real}, 1 + 2im)
 
 c = C1(b=8.0, d=true, e=5.0, k=10+10im)
 @test c.b === 8.0
 @test c.d
 @test c.e === 5.0
-@test c.k === 10 + 10im
+@test c.k === convert(Complex{Real}, 10 + 10im)
 
 d = D1()
 @test d.b == "hi"

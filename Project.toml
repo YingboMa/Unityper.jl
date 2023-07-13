@@ -1,7 +1,7 @@
 name = "Unityper"
 uuid = "a7c27f48-0311-42f6-a7f8-2c11e75eb415"
 authors = ["Yingbo Ma <mayingbo5@gmail.com>, Chris Elrod <elrodc@gmail.com>, and contributors"]
-version = "0.1.4"
+version = "0.1.5"
 
 [deps]
 ConstructionBase = "187b0558-2788-49d3-abe0-74a17ed4e7c9"
