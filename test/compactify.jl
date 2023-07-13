@@ -53,6 +53,8 @@ b = B(a=12, b=2.0, d=2+1im)
 @test b.a === 12
 @test b.b === 2.0
 @test b.d === 2 + 1im
+@test B(a=12.0,b=2.0).a == 12
+@test_throws InexactError B(a=12.5,b=2.0)
 
 c = C()
 @test c.b === 2.0

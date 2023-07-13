@@ -385,9 +385,9 @@ function _compactify(mod, block; debug=false, show_methods=true)
                     if S2 === S
                         is_native = true
                         if isany # don't call simulate_type for Anys
-                            push!(constructor_body, :($newname = $oldname))
+                            push!(constructor_body, :($newname = convert($oldtype,$oldname)))
                         else
-                            push!(constructor_body, :($newname = $simulate_type($newtype, $oldname)))
+                            push!(constructor_body, :($newname = $simulate_type($newtype, convert($oldtype,$oldname))))
                         end
                         break
                     end
