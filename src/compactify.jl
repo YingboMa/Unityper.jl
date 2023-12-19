@@ -291,6 +291,21 @@ function _compactify(mod, block; debug=false, show_methods=true)
             ifold = ifnew
         end
 
+        # build propertynames
+        propnames = :(function (::$(typeof(propertynames)))(x::$T) end)
+        push!(expr.args, propnames)
+        body = propnames.args[end].args
+        push!(body, Expr(:meta, :inline))
+        ifold = expr
+        for (S, namemap) in pairs(S2fields)
+            condition = :($reinterpret($EnumNumType, $getfield(x, $tagname_q)) === $(S2enum_num[S]))
+            uninitialized = expr === ifold
+            behavior = :(return ($(QuoteNode.(common_fields)...), $(QuoteNode.(keys(namemap))...),))
+            ifnew = Expr(ifelse(uninitialized, :if, :elseif), condition, behavior)
+            uninitialized ? push!(body, ifnew) : push!(ifold.args, ifnew)
+            ifold = ifnew
+        end
+
         # build getproperty
         getprop = :(function (::$(typeof(getproperty)))(x::$T, s::$Symbol) end)
         push!(expr.args, getprop)

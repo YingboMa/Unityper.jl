@@ -36,6 +36,7 @@ at = AT(1, 1, 1.0, true, 1 + 1im, reinterpret(var"###AT###1", Int32(0)))
 a = A()
 @test a.a
 @test a.b === 10
+@test sort(collect(propertynames(a))) == [:a, :b, :common_field]
 a = A(; a=false, b=42)
 @test !a.a
 @test a.b === 42
@@ -49,6 +50,7 @@ b = B()
 @test b.a === 1
 @test b.b === 1.0
 @test b.d === 1 + 1.0im
+@test sort(collect(propertynames(b))) == [:a, :b, :common_field, :d]
 b = B(a=12, b=2.0, d=2+1im)
 @test b.a === 12
 @test b.b === 2.0
@@ -61,6 +63,7 @@ c = C()
 @test !c.d
 @test c.e === 3.0
 @test c.k === convert(Complex{Real}, 1 + 2im)
+@test sort(collect(propertynames(c))) == [:b, :common_field, :d, :e, :k]
 
 c = C(b=8.0, d=true, e=5.0, k=10+10im)
 @test c.b === 8.0
@@ -70,6 +73,7 @@ c = C(b=8.0, d=true, e=5.0, k=10+10im)
 
 d = D()
 @test d.b == "hi"
+@test sort(collect(propertynames(d))) == [:b, :common_field]
 d = D(b=100)
 @test d.b === 100
 
